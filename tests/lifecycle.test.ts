@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
   registerCommands: vi.fn(),
   registerTools: vi.fn(),
   resolveConfig: vi.fn(),
-  clearCachedMemory: vi.fn(),
+  deactivateCachedMemory: vi.fn(),
   flushPending: vi.fn(async () => undefined),
   refreshMemoryCache: vi.fn(),
   saveMessages: vi.fn(async () => undefined),
@@ -23,7 +23,7 @@ vi.mock("../extensions/client.ts", () => ({
 vi.mock("../extensions/commands.ts", () => ({ registerCommands: mocks.registerCommands }));
 vi.mock("../extensions/config.ts", () => ({ resolveConfig: mocks.resolveConfig }));
 vi.mock("../extensions/memory.ts", () => ({
-  clearCachedMemory: mocks.clearCachedMemory,
+  deactivateCachedMemory: mocks.deactivateCachedMemory,
   flushPending: mocks.flushPending,
   getCachedMemory: () => mocks.memoryText,
   refreshMemoryCache: mocks.refreshMemoryCache,
@@ -61,7 +61,7 @@ describe("Pi lifecycle", () => {
     mocks.resolveConfig.mockResolvedValue({ enabled: true, apiKey: "fixture-key" });
     mocks.bootstrap.mockResolvedValue({ session: {}, userPeer: {}, aiPeer: {} });
     mocks.refreshMemoryCache.mockImplementation(async () => {
-      mocks.memoryText = "[Persistent memory]\nKey facts:\n• fixture fact";
+      mocks.memoryText = '<honcho-memory peer="owner">\n- fixture fact\n</honcho-memory>';
     });
     mocks.getHandles.mockReturnValue({ session: {}, userPeer: {}, aiPeer: {} });
   });
@@ -76,7 +76,7 @@ describe("Pi lifecycle", () => {
     expect(mocks.bootstrap).toHaveBeenCalledOnce();
     expect(mocks.refreshMemoryCache).toHaveBeenCalledOnce();
     expect(first).toEqual({
-      systemPrompt: "base prompt\n\n[Persistent memory]\nKey facts:\n• fixture fact",
+      systemPrompt: 'base prompt\n\n<honcho-memory peer="owner">\n- fixture fact\n</honcho-memory>',
     });
     expect(second).toEqual(first);
     expect(first.systemPrompt.match(/fixture fact/g)).toHaveLength(1);
@@ -106,7 +106,7 @@ describe("Pi lifecycle", () => {
     expect(statuses.at(-1)).toBe("🧠 Offline");
   });
 
-  it("clears identities and cache when switching sessions before reloading context", async () => {
+  it("clears handles and deactivates the view without destroying reusable cache entries", async () => {
     const { handlers, ctx } = setupExtension();
 
     await handlers.get("session_switch")?.({}, ctx);
@@ -114,7 +114,7 @@ describe("Pi lifecycle", () => {
 
     expect(mocks.flushPending).toHaveBeenCalledOnce();
     expect(mocks.clearHandles).toHaveBeenCalledOnce();
-    expect(mocks.clearCachedMemory).toHaveBeenCalledOnce();
+    expect(mocks.deactivateCachedMemory).toHaveBeenCalledOnce();
     expect(mocks.bootstrap).toHaveBeenCalledOnce();
     expect(mocks.refreshMemoryCache).toHaveBeenCalledOnce();
   });

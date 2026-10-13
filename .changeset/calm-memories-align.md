@@ -2,4 +2,4 @@
 "@agney/pi-honcho-memory": patch
 ---
 
-Include Honcho peer-card key facts in Pi's cached prompt memory alongside the existing user profile and project summary.
+Align automatic prompt memory with the Codex integration: read user-peer context, render the peer card and a five-line representation, and reuse identity-scoped cache entries for ten minutes.

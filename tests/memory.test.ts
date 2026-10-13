@@ -1,10 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HonchoHandles } from "../extensions/client.ts";
 import {
+  CACHE_TTL_MS,
   buildMemoryText,
-  buildKeyFactsText,
-  buildProjectSummaryText,
-  buildUserProfileText,
   clearCachedMemory,
   extractConversationalPairs,
   flushPending,
@@ -58,65 +56,80 @@ describe("extractConversationalPairs", () => {
 });
 
 describe("buildMemoryText", () => {
-  it("formats peer card, user profile, and project summary for prompt injection", () => {
-    const memoryText = buildMemoryText({
+  it("matches the Codex representation and peer-card rendering contract", () => {
+    const context = {
+      representation: [
+        "# heading",
+        " [2026-10-13] first ",
+        "* second",
+        "- third",
+        "fourth",
+        "fifth",
+        "sixth is capped",
+      ].join("\n"),
       peerCard: ["Uses pnpm.", "Prefers minimal changes."],
-      peerRepresentation: "Prefers pnpm.",
       summary: { content: "Working on the Honcho extension." },
       messages: ["not part of automatic injection"],
-    });
+    };
+    const memoryText = buildMemoryText(context, "owner");
 
     expect(memoryText).toBe(
-      "[Persistent memory]\nKey facts:\n• Uses pnpm.\n• Prefers minimal changes.\n\nUser profile:\nPrefers pnpm.\n\nProject summary:\nWorking on the Honcho extension.",
+      '<honcho-memory peer="owner">\n- first\n- second\n- third\n- fourth\n- fifth\nProfile: Uses pnpm.; Prefers minimal changes.\n</honcho-memory>',
     );
   });
 
-  it("ignores messages and absent or empty selected fields", () => {
-    expect(
-      buildMemoryText({
-        peerCard: ["", "   ", null],
-        peerRepresentation: " \n ",
-        summary: { content: "" },
-        messages: ["ignored"],
-      }),
-    ).toBeNull();
+  it("returns null when both selected fields are absent or empty", () => {
+    expect(buildMemoryText({ peerCard: [], representation: " \n# heading " }, "owner")).toBeNull();
+    expect(buildMemoryText(null, "owner")).toBeNull();
   });
 });
 
-describe("split memory sections", () => {
-  it("builds separate text blocks for key facts, user profile, and project summary", () => {
-    expect(buildKeyFactsText(["Uses pnpm.", "Keeps changes small."])).toBe(
-      "[Persistent memory]\nKey facts:\n• Uses pnpm.\n• Keeps changes small.",
-    );
-    expect(buildUserProfileText("Prefers pnpm.")).toBe(
-      "[Persistent memory]\nUser profile:\nPrefers pnpm.",
-    );
-    expect(buildProjectSummaryText("Working on the Honcho extension.")).toBe(
-      "[Persistent memory]\nProject summary:\nWorking on the Honcho extension.",
-    );
-  });
+interface FixtureIdentity {
+  workspaceId?: string;
+  userPeerId?: string;
+  aiPeerId?: string;
+  sessionKey?: string;
+}
 
-  it("returns null for empty section values", () => {
-    expect(buildKeyFactsText([])).toBeNull();
-    expect(buildUserProfileText(null)).toBeNull();
-    expect(buildProjectSummaryText("")).toBeNull();
-  });
-});
-
-const makeHandles = (context: ReturnType<typeof vi.fn>, addMessages = vi.fn()): HonchoHandles =>
+const makeHandles = (
+  context: ReturnType<typeof vi.fn>,
+  addMessages = vi.fn(),
+  identity: FixtureIdentity = {},
+): HonchoHandles =>
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- Narrow SDK fixture for cache/write behavior.
   ({
-    session: { context, addMessages },
-    userPeer: { id: "owner", message: (text: string) => ({ peer: "owner", text }) },
-    aiPeer: { id: "agent-main", message: (text: string) => ({ peer: "agent-main", text }) },
-    config: { contextTokens: 1200, maxMessageLength: 8000 },
+    session: { addMessages },
+    sessionKey: identity.sessionKey ?? "repo:fixture",
+    userPeer: {
+      id: identity.userPeerId ?? "owner",
+      context,
+      message: (text: string) => ({ peer: "owner", text }),
+    },
+    aiPeer: {
+      id: identity.aiPeerId ?? "agent-main",
+      message: (text: string) => ({ peer: "agent-main", text }),
+    },
+    config: {
+      workspaceId: identity.workspaceId ?? "fixture",
+      contextTokens: 1200,
+      maxMessageLength: 8000,
+    },
   }) as unknown as HonchoHandles;
 
 describe("refreshMemoryCache", () => {
-  it("requests directional session context and caches every accepted field exactly once", async () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-13T00:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("requests user-peer context with the exact Codex options and selected fields", async () => {
     const context = vi.fn().mockResolvedValue({
-      peerCard: [" fact one ", "fact two"],
-      peerRepresentation: " profile ",
+      representation: "# owner\n- fact one\n- fact two",
+      peerCard: ["profile one", "profile two"],
       summary: { content: " summary " },
       messages: ["ignored"],
     });
@@ -126,28 +139,71 @@ describe("refreshMemoryCache", () => {
 
     expect(context).toHaveBeenCalledOnce();
     expect(context).toHaveBeenCalledWith({
-      summary: true,
-      peerPerspective: handles.aiPeer,
-      peerTarget: handles.userPeer,
-      tokens: 1200,
+      maxConclusions: 8,
+      includeMostFrequent: true,
     });
     expect(getCachedMemory()).toBe(
-      "[Persistent memory]\nKey facts:\n• fact one\n• fact two\n\nUser profile:\nprofile\n\nProject summary:\nsummary",
+      '<honcho-memory peer="owner">\n- fact one\n- fact two\nProfile: profile one; profile two\n</honcho-memory>',
     );
+    expect(getCachedMemory()).not.toContain("summary");
+    expect(getCachedMemory()).not.toContain("ignored");
   });
 
-  it("replaces the cache on a successful refresh and preserves stale memory on failure", async () => {
-    const first = makeHandles(vi.fn().mockResolvedValue({ peerCard: ["old fact"] }));
-    await refreshMemoryCache(first);
+  it("reuses the same identity through the TTL boundary and refreshes only after it", async () => {
+    const context = vi
+      .fn()
+      .mockResolvedValueOnce({ peerCard: ["old fact"] })
+      .mockResolvedValueOnce({ peerCard: ["new fact"] });
+    const handles = makeHandles(context);
+    await refreshMemoryCache(handles);
     expect(getCachedMemory()).toContain("old fact");
 
-    const failed = makeHandles(vi.fn().mockRejectedValue(new Error("offline")));
-    await refreshMemoryCache(failed);
-    expect(getCachedMemory()).toBe("[Persistent memory]\nKey facts:\n• old fact");
+    vi.setSystemTime(Date.now() + CACHE_TTL_MS);
+    await refreshMemoryCache(handles);
+    expect(context).toHaveBeenCalledOnce();
+    expect(getCachedMemory()).toContain("old fact");
 
-    const next = makeHandles(vi.fn().mockResolvedValue({ peerCard: ["new fact"] }));
-    await refreshMemoryCache(next);
-    expect(getCachedMemory()).toBe("[Persistent memory]\nKey facts:\n• new fact");
+    vi.setSystemTime(Date.now() + 1);
+    await refreshMemoryCache(handles);
+    expect(context).toHaveBeenCalledTimes(2);
+    expect(getCachedMemory()).toContain("new fact");
+  });
+
+  it("preserves same-identity stale memory after a failed refresh", async () => {
+    const oldContext = vi.fn().mockResolvedValue({ peerCard: ["old fact"] });
+    const oldHandles = makeHandles(oldContext);
+    await refreshMemoryCache(oldHandles);
+
+    vi.setSystemTime(Date.now() + CACHE_TTL_MS + 1);
+    oldContext.mockRejectedValueOnce(new Error("offline"));
+    await refreshMemoryCache(oldHandles);
+    expect(getCachedMemory()).toContain("old fact");
+  });
+
+  it.each([
+    ["workspace", { workspaceId: "other" }],
+    ["user peer", { userPeerId: "other" }],
+    ["AI peer", { aiPeerId: "other" }],
+    ["session", { sessionKey: "repo:other" }],
+  ])("never exposes cached memory across a different %s identity", async (_label, identity) => {
+    const oldHandles = makeHandles(vi.fn().mockResolvedValue({ peerCard: ["old fact"] }));
+    await refreshMemoryCache(oldHandles);
+
+    const otherContext = vi.fn().mockRejectedValue(new Error("offline"));
+    const otherHandles = makeHandles(otherContext, vi.fn(), identity);
+    await refreshMemoryCache(otherHandles);
+    expect(getCachedMemory()).toBeNull();
+  });
+
+  it("caches an empty successful response without repeated reads", async () => {
+    const context = vi.fn().mockResolvedValue({ representation: null, peerCard: null });
+    const handles = makeHandles(context);
+
+    await refreshMemoryCache(handles);
+    await refreshMemoryCache(handles);
+
+    expect(context).toHaveBeenCalledOnce();
+    expect(getCachedMemory()).toBeNull();
   });
 });
 

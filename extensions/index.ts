@@ -3,7 +3,7 @@ import { bootstrap, clearHandles, getHandles } from "./client.js";
 import { registerCommands } from "./commands.js";
 import { resolveConfig } from "./config.js";
 import {
-  clearCachedMemory,
+  deactivateCachedMemory,
   flushPending,
   getCachedMemory,
   refreshMemoryCache,
@@ -72,21 +72,21 @@ export default function honcho(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     clearHandles();
-    clearCachedMemory();
+    deactivateCachedMemory();
     backgroundInit(ctx);
   });
 
   pi.on("session_switch", async (_event, ctx) => {
     await flushPending();
     clearHandles();
-    clearCachedMemory();
+    deactivateCachedMemory();
     backgroundInit(ctx);
   });
 
   pi.on("session_fork", async (_event, ctx) => {
     await flushPending();
     clearHandles();
-    clearCachedMemory();
+    deactivateCachedMemory();
     backgroundInit(ctx);
   });
 
