@@ -85,6 +85,7 @@ describe("buildMemoryText", () => {
 });
 
 interface FixtureIdentity {
+  baseURL?: string;
   workspaceId?: string;
   userPeerId?: string;
   aiPeerId?: string;
@@ -110,6 +111,7 @@ const makeHandles = (
       message: (text: string) => ({ peer: "agent-main", text }),
     },
     config: {
+      baseURL: identity.baseURL,
       workspaceId: identity.workspaceId ?? "fixture",
       contextTokens: 1200,
       maxMessageLength: 8000,
@@ -135,7 +137,7 @@ describe("refreshMemoryCache", () => {
     });
     const handles = makeHandles(context);
 
-    await refreshMemoryCache(handles);
+    await refreshMemoryCache(handles, "conversation-a");
 
     expect(context).toHaveBeenCalledOnce();
     expect(context).toHaveBeenCalledWith({
@@ -155,16 +157,16 @@ describe("refreshMemoryCache", () => {
       .mockResolvedValueOnce({ peerCard: ["old fact"] })
       .mockResolvedValueOnce({ peerCard: ["new fact"] });
     const handles = makeHandles(context);
-    await refreshMemoryCache(handles);
+    await refreshMemoryCache(handles, "conversation-a");
     expect(getCachedMemory()).toContain("old fact");
 
     vi.setSystemTime(Date.now() + CACHE_TTL_MS);
-    await refreshMemoryCache(handles);
+    await refreshMemoryCache(handles, "conversation-a");
     expect(context).toHaveBeenCalledOnce();
     expect(getCachedMemory()).toContain("old fact");
 
     vi.setSystemTime(Date.now() + 1);
-    await refreshMemoryCache(handles);
+    await refreshMemoryCache(handles, "conversation-a");
     expect(context).toHaveBeenCalledTimes(2);
     expect(getCachedMemory()).toContain("new fact");
   });
@@ -172,26 +174,41 @@ describe("refreshMemoryCache", () => {
   it("preserves same-identity stale memory after a failed refresh", async () => {
     const oldContext = vi.fn().mockResolvedValue({ peerCard: ["old fact"] });
     const oldHandles = makeHandles(oldContext);
-    await refreshMemoryCache(oldHandles);
+    await refreshMemoryCache(oldHandles, "conversation-a");
 
     vi.setSystemTime(Date.now() + CACHE_TTL_MS + 1);
     oldContext.mockRejectedValueOnce(new Error("offline"));
-    await refreshMemoryCache(oldHandles);
+    await refreshMemoryCache(oldHandles, "conversation-a");
     expect(getCachedMemory()).toContain("old fact");
   });
 
   it.each([
+    ["endpoint", { baseURL: "https://other.invalid" }],
     ["workspace", { workspaceId: "other" }],
     ["user peer", { userPeerId: "other" }],
     ["AI peer", { aiPeerId: "other" }],
     ["session", { sessionKey: "repo:other" }],
   ])("never exposes cached memory across a different %s identity", async (_label, identity) => {
     const oldHandles = makeHandles(vi.fn().mockResolvedValue({ peerCard: ["old fact"] }));
-    await refreshMemoryCache(oldHandles);
+    await refreshMemoryCache(oldHandles, "conversation-a");
 
     const otherContext = vi.fn().mockRejectedValue(new Error("offline"));
     const otherHandles = makeHandles(otherContext, vi.fn(), identity);
-    await refreshMemoryCache(otherHandles);
+    await refreshMemoryCache(otherHandles, "conversation-a");
+    expect(getCachedMemory()).toBeNull();
+  });
+
+  it("never exposes cached memory across Pi conversations", async () => {
+    const context = vi
+      .fn()
+      .mockResolvedValueOnce({ peerCard: ["old fact"] })
+      .mockRejectedValueOnce(new Error("offline"));
+    const handles = makeHandles(context);
+
+    await refreshMemoryCache(handles, "conversation-a");
+    expect(getCachedMemory()).toContain("old fact");
+
+    await refreshMemoryCache(handles, "conversation-b");
     expect(getCachedMemory()).toBeNull();
   });
 
@@ -199,8 +216,8 @@ describe("refreshMemoryCache", () => {
     const context = vi.fn().mockResolvedValue({ representation: null, peerCard: null });
     const handles = makeHandles(context);
 
-    await refreshMemoryCache(handles);
-    await refreshMemoryCache(handles);
+    await refreshMemoryCache(handles, "conversation-a");
+    await refreshMemoryCache(handles, "conversation-a");
 
     expect(context).toHaveBeenCalledOnce();
     expect(getCachedMemory()).toBeNull();
@@ -228,7 +245,7 @@ describe("saveMessages", () => {
 
   it("keeps SDK write failures non-fatal and does not clear cached memory", async () => {
     const primed = makeHandles(vi.fn().mockResolvedValue({ peerCard: ["preserved"] }));
-    await refreshMemoryCache(primed);
+    await refreshMemoryCache(primed, "conversation-a");
 
     const failed = makeHandles(vi.fn(), vi.fn().mockRejectedValue(new Error("write failed")));
     await expect(

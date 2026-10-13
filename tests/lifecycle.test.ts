@@ -41,8 +41,12 @@ const setupExtension = () => {
     }),
   };
   const statuses: string[] = [];
+  let sessionId = "conversation-a";
   const ctx = {
     cwd: "/fixture/repo",
+    sessionManager: {
+      getSessionId: () => sessionId,
+    },
     ui: {
       theme: { fg: (_color: string, text: string) => text },
       setStatus: (_id: string, text: string) => statuses.push(text),
@@ -51,7 +55,14 @@ const setupExtension = () => {
 
   // @ts-expect-error Minimal ExtensionAPI fixture; registration is the behavior under test.
   honcho(pi);
-  return { handlers, statuses, ctx };
+  return {
+    handlers,
+    statuses,
+    ctx,
+    setSessionId: (next: string) => {
+      sessionId = next;
+    },
+  };
 };
 
 describe("Pi lifecycle", () => {
@@ -74,7 +85,10 @@ describe("Pi lifecycle", () => {
     const second = await handlers.get("before_agent_start")?.({ systemPrompt: "base prompt" });
 
     expect(mocks.bootstrap).toHaveBeenCalledOnce();
-    expect(mocks.refreshMemoryCache).toHaveBeenCalledOnce();
+    expect(mocks.refreshMemoryCache).toHaveBeenCalledWith(
+      expect.objectContaining({ session: {}, userPeer: {}, aiPeer: {} }),
+      "conversation-a",
+    );
     expect(first).toEqual({
       systemPrompt: 'base prompt\n\n<honcho-memory peer="owner">\n- fixture fact\n</honcho-memory>',
     });
@@ -117,5 +131,32 @@ describe("Pi lifecycle", () => {
     expect(mocks.deactivateCachedMemory).toHaveBeenCalledOnce();
     expect(mocks.bootstrap).toHaveBeenCalledOnce();
     expect(mocks.refreshMemoryCache).toHaveBeenCalledOnce();
+  });
+
+  it("partitions successive session starts by Pi conversation ID", async () => {
+    const { handlers, ctx, setSessionId } = setupExtension();
+
+    handlers.get("session_start")?.({}, ctx);
+    await handlers.get("before_agent_start")?.({ systemPrompt: "base" });
+    setSessionId("conversation-b");
+    handlers.get("session_start")?.({}, ctx);
+    await handlers.get("before_agent_start")?.({ systemPrompt: "base" });
+
+    expect(mocks.refreshMemoryCache).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshMemoryCache.mock.calls.map((call) => call[1])).toEqual([
+      "conversation-a",
+      "conversation-b",
+    ]);
+  });
+
+  it("rechecks the TTL-backed cache after successful compaction", async () => {
+    const { handlers, ctx } = setupExtension();
+
+    handlers.get("session_start")?.({}, ctx);
+    await handlers.get("before_agent_start")?.({ systemPrompt: "base" });
+    await handlers.get("session_compact")?.({}, ctx);
+
+    expect(mocks.refreshMemoryCache).toHaveBeenCalledTimes(2);
+    expect(mocks.refreshMemoryCache).toHaveBeenLastCalledWith(mocks.getHandles(), "conversation-a");
   });
 });

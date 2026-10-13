@@ -51,12 +51,14 @@ export const buildMemoryText = (
   return `<honcho-memory peer="${peerName}">\n${parts.join("\n")}\n</honcho-memory>`;
 };
 
-const getMemoryKey = (handles: HonchoHandles): string =>
+const getMemoryKey = (handles: HonchoHandles, conversationId: string): string =>
   JSON.stringify([
+    handles.config.baseURL ?? null,
     handles.config.workspaceId,
     handles.userPeer.id,
     handles.aiPeer.id,
     handles.sessionKey,
+    conversationId,
   ]);
 
 export const getCachedMemory = (): string | null =>
@@ -87,8 +89,11 @@ export const flushPending = (): Promise<void> => pendingSave;
  * Activate the identity-scoped cache, reusing it for ten minutes or refreshing
  * it from the user peer. A failed refresh preserves same-identity stale memory.
  */
-export const refreshMemoryCache = async (handles: HonchoHandles): Promise<void> => {
-  const key = getMemoryKey(handles);
+export const refreshMemoryCache = async (
+  handles: HonchoHandles,
+  conversationId: string,
+): Promise<void> => {
+  const key = getMemoryKey(handles, conversationId);
   activeMemoryKey = key;
   const cached = memoryCache.get(key);
   if (cached && Date.now() - cached.at <= CACHE_TTL_MS) {
