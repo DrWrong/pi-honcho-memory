@@ -6,7 +6,7 @@ Persistent memory extension for [pi](https://pi.dev) using [Honcho](https://honc
 
 ## Features
 
-- **Automatic memory injection** — cached user profile and project summary injected into the system prompt with zero network latency
+- **Automatic memory injection** — cached key facts, user profile, and project summary injected into the system prompt with zero network latency
 - **Conversational persistence** — user/assistant messages saved to Honcho after each agent response
 - **Flexible session strategies** — choose repo, git-branch, or directory scoped memory
 - **LLM tools** — `honcho_search`, `honcho_chat`, `honcho_remember` for active memory operations

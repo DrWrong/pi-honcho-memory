@@ -2,19 +2,24 @@ import type { HonchoHandles } from "./client.js";
 
 // --- Cached memory text ---
 const PERSISTENT_MEMORY_HEADER = "[Persistent memory]";
+const KEY_FACTS_LABEL = "Key facts";
 const USER_PROFILE_LABEL = "User profile";
 const PROJECT_SUMMARY_LABEL = "Project summary";
 interface CachedMemoryParts {
+  keyFacts: string[];
   userProfile: string | null;
   projectSummary: string | null;
 }
 
 interface CachedHonchoContext {
+  peerCard?: (string | null | undefined)[] | null;
   peerRepresentation?: string | null;
   summary?: { content?: string | null } | null;
+  messages?: unknown;
 }
 
 const EMPTY_MEMORY: CachedMemoryParts = {
+  keyFacts: [],
   userProfile: null,
   projectSummary: null,
 };
@@ -42,10 +47,22 @@ const normalizeMemoryText = (value?: string | null): string | null => {
   return trimmed;
 };
 
+const normalizeKeyFacts = (values?: (string | null | undefined)[] | null): string[] =>
+  (values ?? [])
+    .map((value) => normalizeMemoryText(value))
+    .filter((value): value is string => value !== null);
+
 export const buildCachedMemoryParts = (context: CachedHonchoContext): CachedMemoryParts => ({
+  keyFacts: normalizeKeyFacts(context.peerCard),
   userProfile: normalizeMemoryText(context.peerRepresentation),
   projectSummary: normalizeMemoryText(context.summary?.content),
 });
+
+export const buildKeyFactsText = (keyFacts: string[]): string | null =>
+  buildSection(
+    KEY_FACTS_LABEL,
+    keyFacts.length > 0 ? keyFacts.map((fact) => `• ${fact}`).join("\n") : null,
+  );
 
 export const buildUserProfileText = (userProfile: string | null): string | null =>
   buildSection(USER_PROFILE_LABEL, userProfile);
@@ -55,6 +72,9 @@ export const buildProjectSummaryText = (projectSummary: string | null): string |
 
 const buildCombinedMemoryText = (parts: CachedMemoryParts): string | null => {
   const sections = [
+    parts.keyFacts.length > 0
+      ? `${KEY_FACTS_LABEL}:\n${parts.keyFacts.map((fact) => `• ${fact}`).join("\n")}`
+      : null,
     parts.userProfile ? `${USER_PROFILE_LABEL}:\n${parts.userProfile}` : null,
     parts.projectSummary ? `${PROJECT_SUMMARY_LABEL}:\n${parts.projectSummary}` : null,
   ].filter((section): section is string => section !== null);
@@ -88,7 +108,7 @@ export const flushPending = (): Promise<void> => pendingSave;
 // --- Memory fetch ---
 
 /**
- * Fetch both user profile and project summary from Honcho and cache them.
+ * Fetch key facts, user profile, and project summary from Honcho and cache them.
  * Called once at session start — project summary is frozen for the session.
  */
 export const refreshMemoryCache = async (handles: HonchoHandles): Promise<void> => {
