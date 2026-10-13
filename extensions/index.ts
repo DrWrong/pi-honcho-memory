@@ -3,7 +3,7 @@ import { bootstrap, clearHandles, getHandles } from "./client.js";
 import { registerCommands } from "./commands.js";
 import { resolveConfig } from "./config.js";
 import {
-  clearCachedMemory,
+  deactivateCachedMemory,
   flushPending,
   getCachedMemory,
   refreshMemoryCache,
@@ -16,6 +16,13 @@ interface StatusContext {
     setStatus: (id: string, text: string) => void;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     theme: any;
+  };
+}
+
+interface LifecycleContext extends StatusContext {
+  cwd: string;
+  sessionManager: {
+    getSessionId: () => string;
   };
 }
 
@@ -46,7 +53,8 @@ export default function honcho(pi: ExtensionAPI): void {
    * Sets status on completion. Never throws.
    */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const backgroundInit = (ctx: { ui: any; cwd: string }): void => {
+  const backgroundInit = (ctx: LifecycleContext): void => {
+    const conversationId = ctx.sessionManager.getSessionId();
     initializing = (async () => {
       try {
         const config = await resolveConfig();
@@ -59,7 +67,7 @@ export default function honcho(pi: ExtensionAPI): void {
         setStatus(ctx, "connected");
 
         // Prefetch memory context
-        await refreshMemoryCache(handles);
+        await refreshMemoryCache(handles, conversationId);
       } catch {
         setStatus(ctx, "offline");
       } finally {
@@ -72,21 +80,21 @@ export default function honcho(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     clearHandles();
-    clearCachedMemory();
+    deactivateCachedMemory();
     backgroundInit(ctx);
   });
 
   pi.on("session_switch", async (_event, ctx) => {
     await flushPending();
     clearHandles();
-    clearCachedMemory();
+    deactivateCachedMemory();
     backgroundInit(ctx);
   });
 
   pi.on("session_fork", async (_event, ctx) => {
     await flushPending();
     clearHandles();
-    clearCachedMemory();
+    deactivateCachedMemory();
     backgroundInit(ctx);
   });
 
@@ -128,6 +136,15 @@ export default function honcho(pi: ExtensionAPI): void {
 
   pi.on("session_before_compact", async () => {
     await flushPending();
+  });
+
+  pi.on("session_compact", async (_event, ctx) => {
+    const handles = getHandles();
+    if (!handles) {
+      return;
+    }
+
+    await refreshMemoryCache(handles, ctx.sessionManager.getSessionId());
   });
 
   pi.on("session_before_switch", async () => {

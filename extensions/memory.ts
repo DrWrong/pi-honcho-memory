@@ -1,78 +1,76 @@
 import type { HonchoHandles } from "./client.js";
 
 // --- Cached memory text ---
-const PERSISTENT_MEMORY_HEADER = "[Persistent memory]";
-const USER_PROFILE_LABEL = "User profile";
-const PROJECT_SUMMARY_LABEL = "Project summary";
-interface CachedMemoryParts {
-  userProfile: string | null;
-  projectSummary: string | null;
+export const CACHE_TTL_MS = 10 * 60 * 1000;
+export const MAX_CONCLUSIONS = 8;
+const REPRESENTATION_LINE_LIMIT = 5;
+
+interface CachedPeerContext {
+  representation?: string | null;
+  peerCard?: (string | null | undefined)[] | null;
 }
 
-interface CachedHonchoContext {
-  peerRepresentation?: string | null;
-  summary?: { content?: string | null } | null;
+interface MemoryCacheEntry {
+  at: number;
+  text: string | null;
 }
 
-const EMPTY_MEMORY: CachedMemoryParts = {
-  userProfile: null,
-  projectSummary: null,
-};
+const memoryCache = new Map<string, MemoryCacheEntry>();
+let activeMemoryKey: string | null = null;
 
-let cachedMemory = EMPTY_MEMORY;
-
-const buildSection = (label: string, value: string | null): string | null => {
-  if (!value) {
+export const buildMemoryText = (
+  context: CachedPeerContext | null | undefined,
+  peerName: string,
+): string | null => {
+  if (!context) {
     return null;
   }
 
-  return `${PERSISTENT_MEMORY_HEADER}\n${label}:\n${value}`;
-};
+  const parts: string[] = [];
+  const { representation } = context;
+  if (typeof representation === "string" && representation.trim()) {
+    const lines = representation
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"))
+      .slice(0, REPRESENTATION_LINE_LIMIT)
+      .map((line) => line.replace(/^[-*]\s*/, "").replace(/^\[.*?\]\s*/, ""));
+    if (lines.length > 0) {
+      parts.push(lines.map((line) => `- ${line}`).join("\n"));
+    }
+  }
 
-const normalizeMemoryText = (value?: string | null): string | null => {
-  if (!value) {
+  if (context.peerCard?.length) {
+    parts.push(`Profile: ${context.peerCard.join("; ")}`);
+  }
+
+  if (parts.length === 0) {
     return null;
   }
 
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  return trimmed;
+  return `<honcho-memory peer="${peerName}">\n${parts.join("\n")}\n</honcho-memory>`;
 };
 
-export const buildCachedMemoryParts = (context: CachedHonchoContext): CachedMemoryParts => ({
-  userProfile: normalizeMemoryText(context.peerRepresentation),
-  projectSummary: normalizeMemoryText(context.summary?.content),
-});
+const getMemoryKey = (handles: HonchoHandles, conversationId: string): string =>
+  JSON.stringify([
+    handles.config.baseURL ?? null,
+    handles.config.workspaceId,
+    handles.userPeer.id,
+    handles.aiPeer.id,
+    handles.sessionKey,
+    conversationId,
+  ]);
 
-export const buildUserProfileText = (userProfile: string | null): string | null =>
-  buildSection(USER_PROFILE_LABEL, userProfile);
+export const getCachedMemory = (): string | null =>
+  activeMemoryKey ? (memoryCache.get(activeMemoryKey)?.text ?? null) : null;
 
-export const buildProjectSummaryText = (projectSummary: string | null): string | null =>
-  buildSection(PROJECT_SUMMARY_LABEL, projectSummary);
-
-const buildCombinedMemoryText = (parts: CachedMemoryParts): string | null => {
-  const sections = [
-    parts.userProfile ? `${USER_PROFILE_LABEL}:\n${parts.userProfile}` : null,
-    parts.projectSummary ? `${PROJECT_SUMMARY_LABEL}:\n${parts.projectSummary}` : null,
-  ].filter((section): section is string => section !== null);
-
-  if (sections.length === 0) {
-    return null;
-  }
-
-  return `${PERSISTENT_MEMORY_HEADER}\n${sections.join("\n\n")}`;
+export const deactivateCachedMemory = (): void => {
+  activeMemoryKey = null;
 };
-
-export const buildMemoryText = (context: CachedHonchoContext): string | null =>
-  buildCombinedMemoryText(buildCachedMemoryParts(context));
-
-export const getCachedMemory = (): string | null => buildCombinedMemoryText(cachedMemory);
 
 export const clearCachedMemory = (): void => {
-  cachedMemory = EMPTY_MEMORY;
+  memoryCache.clear();
+  deactivateCachedMemory();
 };
 
 // --- Async save queue ---
@@ -88,21 +86,32 @@ export const flushPending = (): Promise<void> => pendingSave;
 // --- Memory fetch ---
 
 /**
- * Fetch both user profile and project summary from Honcho and cache them.
- * Called once at session start — project summary is frozen for the session.
+ * Activate the identity-scoped cache, reusing it for ten minutes or refreshing
+ * it from the user peer. A failed refresh preserves same-identity stale memory.
  */
-export const refreshMemoryCache = async (handles: HonchoHandles): Promise<void> => {
+export const refreshMemoryCache = async (
+  handles: HonchoHandles,
+  conversationId: string,
+): Promise<void> => {
+  const key = getMemoryKey(handles, conversationId);
+  activeMemoryKey = key;
+  const cached = memoryCache.get(key);
+  if (cached && Date.now() - cached.at <= CACHE_TTL_MS) {
+    return;
+  }
+
   try {
-    const ctx = await handles.session.context({
-      summary: true,
-      peerPerspective: handles.aiPeer,
-      peerTarget: handles.userPeer,
-      tokens: handles.config.contextTokens,
+    const context = await handles.userPeer.context({
+      maxConclusions: MAX_CONCLUSIONS,
+      includeMostFrequent: true,
     });
 
-    cachedMemory = buildCachedMemoryParts(ctx);
+    memoryCache.set(key, {
+      at: Date.now(),
+      text: buildMemoryText(context, handles.userPeer.id),
+    });
   } catch {
-    // Keep stale cache on failure rather than clearing it
+    // Keep same-identity stale cache on failure rather than clearing it.
   }
 };
 
@@ -162,7 +171,7 @@ export const extractConversationalPairs = (
   return pairs;
 };
 
-// --- Save + refresh pipeline ---
+// --- Message save pipeline ---
 
 /**
  * Save conversational messages to Honcho.

@@ -6,7 +6,7 @@ Persistent memory extension for [pi](https://pi.dev) using [Honcho](https://honc
 
 ## Features
 
-- **Automatic memory injection** — cached user profile and project summary injected into the system prompt with zero network latency
+- **Automatic memory injection** — the user peer's Honcho representation and peer card are cached for 10 minutes and injected into the system prompt with zero prompt-time network latency
 - **Conversational persistence** — user/assistant messages saved to Honcho after each agent response
 - **Flexible session strategies** — choose repo, git-branch, or directory scoped memory
 - **LLM tools** — `honcho_search`, `honcho_chat`, `honcho_remember` for active memory operations
@@ -69,7 +69,7 @@ Config file properties (`~/.honcho/config.json`):
 | `hosts.pi.aiPeer`            | `HONCHO_AI_PEER`             | AI peer name                                                           | `pi`               |
 | `hosts.pi.endpoint`          | `HONCHO_URL`                 | Honcho API base URL                                                    | default Honcho API |
 | `hosts.pi.sessionStrategy`   | `HONCHO_SESSION_STRATEGY`    | Session scope for memory sharing                                       | `repo`             |
-| `hosts.pi.contextTokens`     | `HONCHO_CONTEXT_TOKENS`      | Token budget requested from Honcho for injected project memory         | `1200`             |
+| `hosts.pi.contextTokens`     | `HONCHO_CONTEXT_TOKENS`      | Legacy compatibility setting; automatic peer context does not use it   | `1200`             |
 | `hosts.pi.maxMessageLength`  | `HONCHO_MAX_MESSAGE_LENGTH`  | Maximum length of a synced user/assistant message before it is skipped | `8000`             |
 | `hosts.pi.searchLimit`       | `HONCHO_SEARCH_LIMIT`        | Maximum number of search results returned by `honcho_search`           | `8`                |
 | `hosts.pi.toolPreviewLength` | `HONCHO_TOOL_PREVIEW_LENGTH` | Character preview length per search result returned by `honcho_search` | `500`              |
